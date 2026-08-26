@@ -1,0 +1,176 @@
+# Reguły przetwarzania syslog z Cisco 8000 (IOS XR).
+#
+# Kolejność ma znaczenie przy routing.strategy = first_match:
+#   reguły szczegółowe wyżej, catch-all (xr_generic) zawsze na końcu.
+#
+# Konwencje:
+#   - wyłącznie nazwane grupy (?P<nazwa>...)
+#   - {{xr_prefix}} w regexie jest podstawiane z sekcji defines PRZED kompilacją
+#   - wartości template'u bez {{ }} to literały
+
+defines:
+  # Wspólny nagłówek linii IOS XR:
+  #   <PRI>[SEQ: ]LOKALIZACJA:TIMESTAMP TZ: PROCES[PID]:
+  # SEQ (numer sekwencyjny) jest opcjonalny – pojawia się przy "logging sequence".
+  xr_prefix: >-
+    ^<(?P<pri>\d+)>(?:(?P<seq>\d+): )?(?P<location>(?:RP|LC)/\d+/\w+/CPU\d+):(?P<ts>[A-Z][a-z]{2} {1,2}\d{1,2} \d{2}:\d{2}:\d{2}\.\d{3}) (?P<tz>[A-Z]{2,5}): (?P<process>[\w.-]+)\[(?P<pid>\d+)\]: 
+
+defaults:
+  # Pola dodawane do KAŻDEJ reguły; reguła może je nadpisać własnym template'em.
+  template:
+    received_at: "{{ now() }}"
+    device_time: "{{ ts | parse_ts('%b %d %H:%M:%S.%f', tz) }}"
+    severity:    "{{ pri | pri_severity }}"
+    facility:    "{{ pri | pri_facility }}"
+    location:    "{{ location }}"
+    process:     "{{ process }}"
+    pid:         "{{ pid | int }}"
+    mnemonic:    "{{ mnemonic }}"
+    source:      "cisco-8000"
+    raw:         "{{ raw }}"
+
+rules:
+
+  # ---------------------------------------------------------------------------
+  # Interfejsy
+  # ---------------------------------------------------------------------------
+
+  - name: xr_link_updown
+    enabled: true
+    prefilter: "-LINK-"
+    regex: '{{xr_prefix}}%(?P<mnemonic>PKT_INFRA-LINK-\d-UPDOWN) : Interface (?P<interface>\S+), changed state to (?P<state>\w+)$'
+    output:
+      topic: net-interface-events
+      key: "{{ interface }}"
+    template:
+      event_type: "link_state"
+      interface:  "{{ interface }}"
+      state:      "{{ state | lower }}"
+
+  - name: xr_lineproto_updown
+    enabled: true
+    prefilter: "-LINEPROTO-"
+    regex: '{{xr_prefix}}%(?P<mnemonic>PKT_INFRA-LINEPROTO-\d-UPDOWN) : Line protocol on Interface (?P<interface>\S+), changed state to (?P<state>\w+)$'
+    output:
+      topic: net-interface-events
+      key: "{{ interface }}"
+    template:
+      event_type: "line_protocol_state"
+      interface:  "{{ interface }}"
+      state:      "{{ state | lower }}"
+
+  # ---------------------------------------------------------------------------
+  # Routing
+  # ---------------------------------------------------------------------------
+
+  - name: xr_bgp_adjchange
+    enabled: true
+    prefilter: "BGP-5-ADJCHANGE"
+    regex: '{{xr_prefix}}%(?P<mnemonic>ROUTING-BGP-\d-ADJCHANGE) : neighbor (?P<neighbor>\S+) (?P<state>Up|Down)(?: - (?P<reason>.+?))? \(VRF: (?P<vrf>\S+)\) \(AS: (?P<asn>\d+)\)$'
+    output:
+      topic: net-routing-events
+      key: "{{ neighbor }}"
+    template:
+      event_type: "bgp_adjacency"
+      protocol:   "bgp"
+      neighbor:   "{{ neighbor }}"
+      state:      "{{ state | lower }}"
+      reason:     "{{ reason | default('') }}"
+      vrf:        "{{ vrf }}"
+      asn:        "{{ asn | int }}"
+
+  - name: xr_ospf_adjchg
+    enabled: true
+    prefilter: "OSPF-5-ADJCHG"
+    regex: '{{xr_prefix}}%(?P<mnemonic>ROUTING-OSPF-\d-ADJCHG) : Process (?P<ospf_process>\S+), Nbr (?P<neighbor>\S+) on (?P<interface>\S+) in area (?P<area>\S+) from (?P<from_state>\w+) to (?P<to_state>\w+), (?P<reason>.+)$'
+    output:
+      topic: net-routing-events
+      key: "{{ neighbor }}"
+    template:
+      event_type:   "ospf_adjacency"
+      protocol:     "ospf"
+      ospf_process: "{{ ospf_process }}"
+      neighbor:     "{{ neighbor }}"
+      interface:    "{{ interface }}"
+      area:         "{{ area }}"
+      from_state:   "{{ from_state | lower }}"
+      to_state:     "{{ to_state | lower }}"
+      reason:       "{{ reason }}"
+
+  - name: xr_bfd_session
+    enabled: true
+    prefilter: "L2-BFD-"
+    regex: '{{xr_prefix}}%(?P<mnemonic>L2-BFD-\d-SESSION_STATE_(?P<state>UP|DOWN)) : BFD session to neighbor (?P<neighbor>\S+) on interface (?P<interface>\S+) has (?:gone|come) (?:down|up)\.(?: Reason: (?P<reason>.+))?$'
+    output:
+      topic: net-routing-events
+      key: "{{ neighbor }}"
+    template:
+      event_type: "bfd_session"
+      protocol:   "bfd"
+      neighbor:   "{{ neighbor }}"
+      interface:  "{{ interface }}"
+      state:      "{{ state | lower }}"
+      reason:     "{{ reason | default('') }}"
+
+  # ---------------------------------------------------------------------------
+  # Konfiguracja i bezpieczeństwo
+  # ---------------------------------------------------------------------------
+
+  - name: xr_config_commit
+    enabled: true
+    prefilter: "CONFIG-6-DB_COMMIT"
+    regex: '{{xr_prefix}}%(?P<mnemonic>MGBL-CONFIG-\d-DB_COMMIT) : Configuration committed by user ''(?P<user>[^'']+)''\. Use ''show configuration commit changes (?P<commit_id>\d+)'' to view the changes\.$'
+    output:
+      topic: net-audit-events
+      key: "{{ user }}"
+    template:
+      event_type: "config_commit"
+      user:       "{{ user }}"
+      commit_id:  "{{ commit_id }}"
+
+  - name: xr_login_auth
+    enabled: true
+    prefilter: "SECURITY-login-"
+    regex: '{{xr_prefix}}%(?P<mnemonic>SECURITY-login-\d-AUTHEN_(?P<result>SUCCESS|FAILED)) : (?:Successfully authenticated user|Failed authentication attempt by user) ''(?P<user>[^'']+)'' from ''(?P<src_ip>[^'']+)'' on ''(?P<line>[^'']+)''$'
+    output:
+      topic: net-audit-events
+      key: "{{ src_ip }}"
+    template:
+      event_type: "login"
+      result:     "{{ result | lower }}"
+      user:       "{{ user }}"
+      src_ip:     "{{ src_ip }}"
+      line:       "{{ line }}"
+
+  # ---------------------------------------------------------------------------
+  # Alarmy platformy (Fault Manager)
+  # ---------------------------------------------------------------------------
+
+  - name: xr_fm_alarm
+    enabled: true
+    prefilter: "PKT_INFRA-FM-"
+    regex: '{{xr_prefix}}%(?P<mnemonic>PKT_INFRA-FM-\d-FAULT_(?P<fault_level>\w+)) : (?P<alarm_severity>\w+) :(?P<alarm_name>[^:]+?) :(?P<action>DECLARE|CLEAR) :(?P<alarm_location>[^:]+):$'
+    output:
+      topic: net-platform-alarms
+      key: "{{ alarm_location }}"
+    template:
+      event_type:     "platform_alarm"
+      alarm_name:     "{{ alarm_name | trim }}"
+      alarm_severity: "{{ alarm_severity | lower }}"
+      fault_level:    "{{ fault_level | lower }}"
+      action:         "{{ action | lower }}"
+      alarm_location: "{{ alarm_location }}"
+      active:         "{{ action == 'DECLARE' }}"
+
+  # ---------------------------------------------------------------------------
+  # Catch-all – każda poprawna linia IOS XR, która nie pasuje do reguł wyżej
+  # ---------------------------------------------------------------------------
+
+  - name: xr_generic
+    enabled: true
+    regex: '{{xr_prefix}}%(?P<mnemonic>[\w-]+) : (?P<message>.*)$'
+    output:
+      topic: syslog-json
+    template:
+      event_type: "generic"
+      message:    "{{ message }}"
