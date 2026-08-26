@@ -12,6 +12,54 @@ Nowe typy komunikatów obsługuje się przez dopisanie reguły w `config/rules.y
 — bez zmian w kodzie. Semantyka dostarczania: at-least-once (commit offsetu po
 potwierdzeniu produce, producent idempotentny).
 
+## Schemat blokowy
+
+### Start serwisu i walidacja konfiguracji (fail-fast)
+
+```mermaid
+flowchart TD
+    SY["config/service.yaml<br/>(Kafka, routing, metryki)"] --> VAL
+    RY["config/rules.yaml<br/>(defines, defaults, reguły)"] --> VAL
+    VAL{"Walidacja fail-fast:<br/>podstawienie defines,<br/>kompilacja regexów RE2/J,<br/>grupy vs template, filtry i arność,<br/>unikalne nazwy, niepusty topic"}
+    VAL -- "błąd" --> STOP["Serwis nie startuje —<br/>czytelny komunikat błędu"]
+    VAL -- "OK" --> ENG["RuleEngine: skompilowane reguły<br/>(prefilter + regex + template + topic)"]
+    ENG --> CLI["CLI: validate / dry-run / test"]
+    ENG --> RUN["run: pipeline Kafka"]
+```
+
+### Pętla przetwarzania (`run`)
+
+```mermaid
+flowchart TD
+    IN[("Kafka<br/>syslog-raw")] --> CONS["consume — batch"]
+    CONS --> DEC["dekodowanie UTF-8"]
+    DEC --> NEXTRULE{"jest następna<br/>reguła?"}
+
+    NEXTRULE -- "tak" --> PF{"prefilter<br/>w linii?"}
+    PF -- "nie" --> NEXTRULE
+    PF -- "tak / brak prefiltera" --> RX{"regex RE2/J<br/>pasuje?"}
+    RX -- "nie" --> NEXTRULE
+    RX -- "tak" --> CTX["kontekst: nazwane grupy,<br/>raw, kafka.*"]
+    CTX --> REN["render template<br/>(filtry: pri_severity, parse_ts, int, ...)"]
+    REN -- "błąd renderowania —<br/>jak brak dopasowania" --> NEXTRULE
+    REN -- "OK" --> JSON["serializacja JSON"]
+    JSON --> PROD["produce na topic reguły<br/>klucz: output.key albo klucz wejściowy,<br/>nagłówki przepisane z wejścia"]
+    PROD -- "all_matches:<br/>sprawdzaj kolejne reguły" --> NEXTRULE
+
+    NEXTRULE -- "nie — brak dopasowania" --> NM{"routing.on_no_match"}
+    NM -- "dlq" --> DLQ[("syslog-unmatched<br/>raw + powód + partycja/offset")]
+    NM -- "drop" --> DROP["odrzucenie<br/>+ metryka unmatched_total"]
+    NM -- "passthrough" --> PASS[("topic domyślny<br/>parse_error: true")]
+
+    PROD -- "first_match: koniec reguł" --> ACK{"ack wszystkich<br/>produce w batchu?"}
+    DLQ --> ACK
+    PASS --> ACK
+    ACK -- "tak" --> COMMIT["commit offsetów<br/>(at-least-once)"]
+    ACK -- "nie" --> REW["cofnięcie batcha (seek)<br/>+ retry z backoffem"]
+    REW --> CONS
+    COMMIT --> CONS
+```
+
 ## Budowanie
 
 ```bash
