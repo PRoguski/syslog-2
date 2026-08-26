@@ -1,0 +1,217 @@
+# Golden testy dla config/rules.yaml
+#
+# Uruchomienie:  service test --config config/service.yaml --rules config/rules.yaml --tests tests/golden.yaml
+#
+# Semantyka:
+#   - expect_json jest porównywane jako PODZBIÓR: wymienione pola muszą mieć dokładnie taką wartość,
+#     pola niewymienione są ignorowane (dzięki temu nie trzeba wpisywać raw i received_at).
+#   - clock zamraża now() – potrzebne, bo parse_ts uzupełnia brakujący rok z zegara.
+#   - expect_rule: null oznacza brak dopasowania → routing.on_no_match.
+
+clock: "2026-08-26T12:00:00Z"
+
+tests:
+
+  - name: link_down
+    input: "<187>RP/0/RP0/CPU0:Aug 26 10:14:22.531 UTC: ifmgr[402]: %PKT_INFRA-LINK-3-UPDOWN : Interface HundredGigE0/0/0/0, changed state to Down"
+    expect_rule: xr_link_updown
+    expect_topic: net-interface-events
+    expect_key: "HundredGigE0/0/0/0"
+    expect_json:
+      event_type: link_state
+      interface: HundredGigE0/0/0/0
+      state: down
+      severity: 3
+      facility: 23
+      location: RP/0/RP0/CPU0
+      process: ifmgr
+      pid: 402
+      mnemonic: PKT_INFRA-LINK-3-UPDOWN
+      device_time: "2026-08-26T10:14:22.531+00:00"
+      source: cisco-8000
+
+  - name: lineproto_down
+    input: "<189>RP/0/RP0/CPU0:Aug 26 10:14:22.540 UTC: ifmgr[402]: %PKT_INFRA-LINEPROTO-5-UPDOWN : Line protocol on Interface HundredGigE0/0/0/0, changed state to Down"
+    expect_rule: xr_lineproto_updown
+    expect_topic: net-interface-events
+    expect_json:
+      event_type: line_protocol_state
+      interface: HundredGigE0/0/0/0
+      state: down
+      severity: 5
+
+  - name: link_up
+    input: "<187>RP/0/RP0/CPU0:Aug 26 10:14:58.118 UTC: ifmgr[402]: %PKT_INFRA-LINK-3-UPDOWN : Interface HundredGigE0/0/0/0, changed state to Up"
+    expect_rule: xr_link_updown
+    expect_topic: net-interface-events
+    expect_json:
+      event_type: link_state
+      state: up
+
+  - name: lineproto_up
+    input: "<189>RP/0/RP0/CPU0:Aug 26 10:14:58.127 UTC: ifmgr[402]: %PKT_INFRA-LINEPROTO-5-UPDOWN : Line protocol on Interface HundredGigE0/0/0/0, changed state to Up"
+    expect_rule: xr_lineproto_updown
+    expect_topic: net-interface-events
+    expect_json:
+      event_type: line_protocol_state
+      state: up
+
+  - name: bgp_down_with_reason
+    input: "<189>RP/0/RP0/CPU0:Aug 26 10:15:31.004 UTC: bgp[1078]: %ROUTING-BGP-5-ADJCHANGE : neighbor 10.1.1.2 Down - BGP Notification received: hold time expired (VRF: default) (AS: 65001)"
+    expect_rule: xr_bgp_adjchange
+    expect_topic: net-routing-events
+    expect_key: "10.1.1.2"
+    expect_json:
+      event_type: bgp_adjacency
+      protocol: bgp
+      neighbor: 10.1.1.2
+      state: down
+      reason: "BGP Notification received: hold time expired"
+      vrf: default
+      asn: 65001
+      process: bgp
+      pid: 1078
+
+  - name: bgp_up_no_reason
+    input: "<189>RP/0/RP0/CPU0:Aug 26 10:16:02.877 UTC: bgp[1078]: %ROUTING-BGP-5-ADJCHANGE : neighbor 10.1.1.2 Up (VRF: default) (AS: 65001)"
+    expect_rule: xr_bgp_adjchange
+    expect_topic: net-routing-events
+    expect_json:
+      event_type: bgp_adjacency
+      state: up
+      reason: ""
+      vrf: default
+      asn: 65001
+
+  - name: ospf_full_to_down
+    input: "<189>RP/0/RP0/CPU0:Aug 26 10:15:30.990 UTC: ospf[1112]: %ROUTING-OSPF-5-ADJCHG : Process 1, Nbr 10.0.0.2 on HundredGigE0/0/0/1 in area 0 from FULL to DOWN, Neighbor Down: Dead timer expired"
+    expect_rule: xr_ospf_adjchg
+    expect_topic: net-routing-events
+    expect_key: "10.0.0.2"
+    expect_json:
+      event_type: ospf_adjacency
+      protocol: ospf
+      ospf_process: "1"
+      neighbor: 10.0.0.2
+      interface: HundredGigE0/0/0/1
+      area: "0"
+      from_state: full
+      to_state: down
+      reason: "Neighbor Down: Dead timer expired"
+
+  - name: bfd_down_with_seq_and_lc_location
+    # Sprawdza: opcjonalny numer sekwencyjny "000123: " i lokalizację LC/... zamiast RP/...
+    input: "<190>000123: LC/0/0/CPU0:Aug 26 10:15:29.812 UTC: bfd_agent[248]: %L2-BFD-6-SESSION_STATE_DOWN : BFD session to neighbor 10.1.1.2 on interface HundredGigE0/0/0/0 has gone down. Reason: Control Detection Time Expired"
+    expect_rule: xr_bfd_session
+    expect_topic: net-routing-events
+    expect_json:
+      event_type: bfd_session
+      protocol: bfd
+      neighbor: 10.1.1.2
+      interface: HundredGigE0/0/0/0
+      state: down
+      reason: "Control Detection Time Expired"
+      location: LC/0/0/CPU0
+      process: bfd_agent
+      pid: 248
+      severity: 6
+
+  - name: config_commit
+    input: "<190>RP/0/RP0/CPU0:Aug 26 10:20:07.303 UTC: config[65743]: %MGBL-CONFIG-6-DB_COMMIT : Configuration committed by user 'netops'. Use 'show configuration commit changes 1000000341' to view the changes."
+    expect_rule: xr_config_commit
+    expect_topic: net-audit-events
+    expect_key: netops
+    expect_json:
+      event_type: config_commit
+      user: netops
+      commit_id: "1000000341"
+      severity: 6
+
+  - name: login_failed
+    input: "<188>RP/0/RP0/CPU0:Aug 26 10:21:44.019 UTC: login[65801]: %SECURITY-login-4-AUTHEN_FAILED : Failed authentication attempt by user 'root' from '192.0.2.77' on 'vty0'"
+    expect_rule: xr_login_auth
+    expect_topic: net-audit-events
+    expect_key: "192.0.2.77"
+    expect_json:
+      event_type: login
+      result: failed
+      user: root
+      src_ip: 192.0.2.77
+      line: vty0
+      severity: 4
+      mnemonic: SECURITY-login-4-AUTHEN_FAILED
+
+  - name: login_success
+    input: "<190>RP/0/RP0/CPU0:Aug 26 10:21:58.662 UTC: login[65801]: %SECURITY-login-6-AUTHEN_SUCCESS : Successfully authenticated user 'netops' from '10.10.5.21' on 'vty0'"
+    expect_rule: xr_login_auth
+    expect_topic: net-audit-events
+    expect_json:
+      event_type: login
+      result: success
+      user: netops
+      src_ip: 10.10.5.21
+      severity: 6
+
+  - name: fan_alarm_declare
+    input: "<186>RP/0/RP0/CPU0:Aug 26 10:25:12.450 UTC: envmon[301]: %PKT_INFRA-FM-2-FAULT_CRITICAL : ALARM_CRITICAL :FAN_MODULE_FAILED :DECLARE :0/FT2:"
+    expect_rule: xr_fm_alarm
+    expect_topic: net-platform-alarms
+    expect_key: "0/FT2"
+    expect_json:
+      event_type: platform_alarm
+      alarm_name: FAN_MODULE_FAILED
+      alarm_severity: alarm_critical
+      fault_level: critical
+      action: declare
+      active: true
+      alarm_location: 0/FT2
+      severity: 2
+
+  - name: fan_alarm_clear
+    input: "<186>RP/0/RP0/CPU0:Aug 26 10:31:40.208 UTC: envmon[301]: %PKT_INFRA-FM-2-FAULT_CRITICAL : ALARM_CRITICAL :FAN_MODULE_FAILED :CLEAR :0/FT2:"
+    expect_rule: xr_fm_alarm
+    expect_topic: net-platform-alarms
+    expect_json:
+      event_type: platform_alarm
+      alarm_name: FAN_MODULE_FAILED
+      action: clear
+      active: false
+
+  - name: optics_minor_alarm_lc
+    input: "<188>LC/0/0/CPU0:Aug 26 10:26:03.771 UTC: optics_driver[199]: %PKT_INFRA-FM-4-FAULT_MINOR : ALARM_MINOR :OPTICS RX POWER LANE-0 LOW WARNING :DECLARE :0/0/0/4:"
+    expect_rule: xr_fm_alarm
+    expect_topic: net-platform-alarms
+    expect_json:
+      event_type: platform_alarm
+      alarm_name: "OPTICS RX POWER LANE-0 LOW WARNING"
+      alarm_severity: alarm_minor
+      fault_level: minor
+      action: declare
+      active: true
+      alarm_location: 0/0/0/4
+      location: LC/0/0/CPU0
+      severity: 4
+
+  - name: isis_falls_to_generic
+    # Brak dedykowanej reguły dla IS-IS – musi trafić do catch-all, a NIE do żadnej innej reguły.
+    input: "<189>RP/0/RP0/CPU0:Aug 26 10:27:15.093 UTC: isis[1099]: %ROUTING-ISIS-5-ADJCHANGE : Adjacency to spine-1 (HundredGigE0/0/0/2) (L2) Up, New adjacency"
+    expect_rule: xr_generic
+    expect_topic: syslog-json
+    expect_json:
+      event_type: generic
+      mnemonic: ROUTING-ISIS-5-ADJCHANGE
+      message: "Adjacency to spine-1 (HundredGigE0/0/0/2) (L2) Up, New adjacency"
+      process: isis
+      pid: 1099
+      severity: 5
+
+  - name: non_cisco_line_unmatched
+    # Linia spoza IOS XR – nie pasuje do prefixu, ma trafić na DLQ.
+    input: "<14>Aug 26 10:28:00 linux-host sshd[1234]: Accepted publickey for ops from 10.0.0.5 port 51234 ssh2"
+    expect_rule: null
+    expect_topic: syslog-unmatched
+
+  - name: empty_line_unmatched
+    input: ""
+    expect_rule: null
+    expect_topic: syslog-unmatched
