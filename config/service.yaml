@@ -1,0 +1,30 @@
+# Kafka connectivity, routing policy and operational knobs.
+# Changes rarely — deployed as part of the pod/container config.
+# New message types go in rules.yaml, not here.
+
+kafka:
+  bootstrap: "kafka1:9092,kafka2:9092"
+  application_id: syslog-parser        # = group.id in Kafka Streams
+  input:
+    topic: syslog-raw
+  streams:
+    num_stream_threads: 4
+    processing_guarantee: at_least_once # at_least_once | exactly_once_v2
+    commit_interval_ms: 1000
+
+routing:
+  strategy: first_match                 # first_match | all_matches
+  on_no_match:
+    action: dlq                         # dlq | drop | passthrough
+    topic: syslog-unmatched
+
+fields:
+  assume_current_year: true             # IOS XR timestamps carry no year
+  default_timezone: UTC
+
+metrics:
+  port: 9090
+
+health:
+  port: 8080
+  stale_after_seconds: 300

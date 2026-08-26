@@ -1,0 +1,64 @@
+# Cisco 8000 (IOS XR) syslog parsing rules.
+#
+# Each rule: a regex with named groups, a set of output fields built from
+# those groups, and a Kafka topic to send the resulting JSON to. New message
+# types are added here — no code changes required.
+#
+# Regex group names must be plain camelCase: java.util.regex only allows
+# [a-zA-Z][a-zA-Z0-9]* in (?<name>...), no underscores. Output JSON keys stay
+# snake_case; the field definition below is what maps one onto the other.
+#
+# `first_match` is configured in service.yaml, so rule order matters: the
+# generic catch-all rule must always be last.
+
+defines:
+  xr_prefix: >-
+    ^<(?<pri>\d+)>(?:(?<seq>\d+): )?(?<location>(?:RP|LC)/\d+/\w+/CPU\d+):(?<ts>[A-Z][a-z]{2} {1,2}\d{1,2} \d{2}:\d{2}:\d{2}\.\d{3}) (?<tz>[A-Z]{2,5}): (?<process>[\w.-]+)\[(?<pid>\d+)\]:
+
+defaults:
+  fields:
+    received_at: "{{ now() }}"
+    device_time: "{{ ts | parse_ts('MMM ppd HH:mm:ss.SSS', tz) }}"
+    severity:    "{{ pri | pri_severity }}"
+    facility:    "{{ pri | pri_facility }}"
+    location:    "{{ location }}"
+    process:     "{{ process }}"
+    pid:         "{{ pid | int }}"
+    mnemonic:    "{{ mnemonic }}"
+    source:      "cisco-8000"
+    raw:         "{{ raw }}"
+
+rules:
+  - name: xr_login_auth
+    enabled: true
+    prefilter: "SECURITY-login-"
+    regex: '{{xr_prefix}} %(?<mnemonic>SECURITY-login-\d-AUTHEN_(?<result>SUCCESS|FAILED)) : (?:Successfully authenticated user|Failed authentication attempt by user) ''(?<user>[^'']+)'' from ''(?<srcIp>[^'']+)'' on ''(?<line>[^'']+)''$'
+    output:
+      topic: net-audit-events
+      key: "{{ srcIp }}"
+    fields:
+      event_type: "login"
+      result:     "{{ result | lower }}"
+      user:       "{{ user }}"
+      src_ip:     "{{ srcIp }}"
+      line:       "{{ line }}"
+
+  - name: xr_link_updown
+    enabled: true
+    prefilter: "PKT_INFRA-LINK-"
+    regex: '{{xr_prefix}} %(?<mnemonic>PKT_INFRA-LINK-\d-UPDOWN) : Interface (?<iface>[\w/.]+), changed state to (?<state>\w+)$'
+    output:
+      topic: net-interface-events
+    fields:
+      event_type: "link_state"
+      interface:  "{{ iface }}"
+      state:      "{{ state | lower }}"
+
+  - name: xr_generic                    # catch-all, ALWAYS last
+    enabled: true
+    regex: '{{xr_prefix}} %(?<mnemonic>[\w-]+) : (?<message>.*)$'
+    output:
+      topic: syslog-json
+    fields:
+      event_type: "generic"
+      message:    "{{ message }}"

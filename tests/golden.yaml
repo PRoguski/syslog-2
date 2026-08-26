@@ -1,0 +1,79 @@
+# Golden tests: real Cisco 8000 sample lines with the outcome they must
+# produce. This is the gate for changes to rules.yaml — a regex tweak or a
+# reordered rule that breaks one of these fails CI (see `syslog-parser test`
+# and the JUnit @TestFactory in GoldenTests).
+#
+# Only the fields listed under `fields` are checked; anything else in the
+# JSON output (e.g. `received_at`, which changes every run) is ignored.
+
+tests:
+  - name: link_down_interface
+    input: >-
+      <187>RP/0/RP0/CPU0:Aug 26 10:14:22.531 UTC: ifmgr[402]: %PKT_INFRA-LINK-3-UPDOWN : Interface HundredGigE0/0/0/0, changed state to Down
+    expect:
+      rule: xr_link_updown
+      topic: net-interface-events
+      fields:
+        event_type: link_state
+        interface: HundredGigE0/0/0/0
+        state: down
+        process: ifmgr
+        pid: 402
+        severity: 3
+        facility: 23
+        mnemonic: PKT_INFRA-LINK-3-UPDOWN
+        location: RP/0/RP0/CPU0
+        source: cisco-8000
+
+  - name: login_failed
+    input: >-
+      <189>RP/0/RP0/CPU0:Aug 26 09:03:11.204 UTC: sshd_operns[289]: %SECURITY-login-3-AUTHEN_FAILED : Failed authentication attempt by user 'admin' from '10.0.0.5' on 'vty0'
+    expect:
+      rule: xr_login_auth
+      topic: net-audit-events
+      key: "10.0.0.5"
+      fields:
+        event_type: login
+        result: failed
+        user: admin
+        src_ip: "10.0.0.5"
+        line: vty0
+        process: sshd_operns
+        pid: 289
+        severity: 5
+        facility: 23
+        mnemonic: SECURITY-login-3-AUTHEN_FAILED
+
+  - name: login_succeeded
+    input: >-
+      <190>RP/0/RP0/CPU0:Aug 26 09:05:00.010 UTC: sshd_operns[289]: %SECURITY-login-6-AUTHEN_SUCCESS : Successfully authenticated user 'admin' from '10.0.0.5' on 'vty0'
+    expect:
+      rule: xr_login_auth
+      topic: net-audit-events
+      key: "10.0.0.5"
+      fields:
+        event_type: login
+        result: success
+        user: admin
+        src_ip: "10.0.0.5"
+        mnemonic: SECURITY-login-6-AUTHEN_SUCCESS
+
+  - name: generic_bgp_adjchange
+    input: >-
+      <188>RP/0/RP0/CPU0:Aug 26 11:00:00.000 UTC: bgp[512]: %ROUTING-BGP-5-ADJCHANGE : neighbor 10.1.1.1 Up
+    expect:
+      rule: xr_generic
+      topic: syslog-json
+      fields:
+        event_type: generic
+        message: "neighbor 10.1.1.1 Up"
+        process: bgp
+        pid: 512
+        severity: 4
+        facility: 23
+        mnemonic: ROUTING-BGP-5-ADJCHANGE
+
+  - name: unrecognized_line_is_unmatched
+    input: "this is not a valid syslog line at all"
+    expect:
+      unmatched: true
