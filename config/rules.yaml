@@ -12,8 +12,7 @@ defines:
   # Wspólny nagłówek linii IOS XR:
   #   <PRI>[SEQ: ]LOKALIZACJA:TIMESTAMP TZ: PROCES[PID]:
   # SEQ (numer sekwencyjny) jest opcjonalny – pojawia się przy "logging sequence".
-  xr_prefix: >-
-    ^<(?P<pri>\d+)>(?:(?P<seq>\d+): )?(?P<location>(?:RP|LC)/\d+/\w+/CPU\d+):(?P<ts>[A-Z][a-z]{2} {1,2}\d{1,2} \d{2}:\d{2}:\d{2}\.\d{3}) (?P<tz>[A-Z]{2,5}): (?P<process>[\w.-]+)\[(?P<pid>\d+)\]: 
+  xr_prefix: '^<(?P<pri>\d+)>(?:(?P<seq>\d+): )?(?P<location>(?:RP|LC)/\d+/\w+/CPU\d+):(?P<ts>[A-Z][a-z]{2} {1,2}\d{1,2} \d{2}:\d{2}:\d{2}\.\d{3}) (?P<tz>[A-Z]{2,5}): (?P<process>[\w.-]+)\[(?P<pid>\d+)\]: '
 
 defaults:
   # Pola dodawane do KAŻDEJ reguły; reguła może je nadpisać własnym template'em.
