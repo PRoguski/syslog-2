@@ -1,0 +1,19 @@
+# Konfiguracja serwisu (parametry stałe — zmienia się rzadko).
+# Reguły przetwarzania żyją osobno w config/rules.yaml.
+
+kafka:
+  bootstrap: "kafka1:9092,kafka2:9092"
+  input:
+    topic: syslog-raw
+    group_id: syslog-parser
+  producer:
+    idempotent: true
+
+routing:
+  strategy: first_match        # first_match | all_matches
+  on_no_match:
+    action: dlq                # dlq | drop | passthrough
+    topic: syslog-unmatched
+
+metrics:
+  port: 9090
