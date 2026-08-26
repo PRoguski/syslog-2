@@ -1,7 +1,7 @@
 # syslog-parser
 
 Serwis przetwarzania komunikatów syslog z urządzeń Cisco serii 8000 (IOS XR),
-zaimplementowany w Javie (21) i budowany Mavenem, według planu w
+zaimplementowany w Javie (wymaga JDK 17+) i budowany Mavenem, według planu w
 [`plan-syslog-parser.md`](plan-syslog-parser.md):
 
 ```

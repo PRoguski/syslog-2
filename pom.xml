@@ -13,7 +13,7 @@
   <description>Kafka syslog parser for Cisco 8000 (IOS XR): regex rules + templates -> JSON -> Kafka</description>
 
   <properties>
-    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <kafka.version>3.7.1</kafka.version>
     <jackson.version>2.17.2</jackson.version>
